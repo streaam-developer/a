@@ -87,8 +87,10 @@ class InstagramBot:
     
     def setup_client(self):
         """Setup Instagram client settings"""
-        # Set custom user agent
-        self.client.set_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        # Set custom user agent - use a more common one
+        self.client.set_user_agent(
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+        )
         
         # Configure delay settings
         self.client.delay_range = self.config.get("delay_range", [2, 5])
@@ -98,6 +100,13 @@ class InstagramBot:
             self.client.set_proxy(self.config.get("proxy"))
             logger.info("Proxy configured")
         
+        # Initialize settings for CSRF handling
+        self.client.settings = {
+            "uuids": {},
+            "cookies": {},
+            "token": None
+        }
+        
         # Load session if exists
         if os.path.exists(self.session_path):
             try:
@@ -105,6 +114,11 @@ class InstagramBot:
                 logger.info("Loaded existing session")
             except Exception as e:
                 logger.warning(f"Could not load session: {e}")
+                # Remove corrupted session file
+                try:
+                    os.remove(self.session_path)
+                except:
+                    pass
     
     def login(self, username: str = None, password: str = None) -> bool:
         """
@@ -124,22 +138,36 @@ class InstagramBot:
             logger.error("Username and password are required!")
             return False
         
-        # Try to login with session first
+        # Delete any old session file to start fresh
         if os.path.exists(self.session_path):
             try:
-                logger.info("Attempting login with existing session...")
-                if self.client.login(username, password):
-                    logger.info("Successfully logged in with session!")
-                    self.save_session()
-                    return True
-            except Exception as e:
-                logger.warning(f"Session login failed: {e}")
+                os.remove(self.session_path)
+                logger.info("Removed old session file")
+            except:
+                pass
+        
+        # Create fresh client
+        logger.info("Creating fresh client...")
+        self.client = Client()
+        self.setup_client()
+        
+        # Try pre-login to get CSRF token
+        logger.info("Getting pre-login session...")
+        try:
+            # This helps initialize the session properly
+            self.client.user_loginbyusernameprelogin(username)
+        except Exception as e:
+            logger.debug(f"Pre-login step: {e}")
         
         # Perform fresh login
         logger.info(f"Attempting fresh login for user: {username}")
         
         for attempt in range(self.config.get("max_retries", 3)):
             try:
+                # Add a small delay before login to allow CSRF token to be fetched
+                import time
+                time.sleep(random.uniform(2, 5))
+                
                 if self.client.login(username, password):
                     logger.info("Successfully logged in!")
                     self.save_session()
@@ -169,11 +197,18 @@ class InstagramBot:
                 logger.error("Login required - check credentials")
                 
             except Exception as e:
-                logger.error(f"Login attempt {attempt + 1} failed: {e}")
+                error_msg = str(e)
+                logger.error(f"Login attempt {attempt + 1} failed: {error_msg}")
                 
+                # If CSRF error, create new client and retry
+                if "CSRF" in error_msg or "403" in error_msg or "fail" in error_msg:
+                    logger.info("Session error detected, recreating client...")
+                    self.client = Client()
+                    self.setup_client()
+            
             # Wait before retry
             if attempt < self.config.get("max_retries", 3) - 1:
-                wait_time = random.randint(5, 15)
+                wait_time = random.randint(15, 45)
                 logger.info(f"Waiting {wait_time} seconds before retry...")
                 import time
                 time.sleep(wait_time)
