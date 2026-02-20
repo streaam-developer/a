@@ -16,6 +16,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, List
 import random
+import uuid
 
 # Instagrapi imports
 try:
@@ -87,9 +88,9 @@ class InstagramBot:
     
     def setup_client(self):
         """Setup Instagram client settings"""
-        # Set custom user agent - use a more common one
+        # Set custom user agent - use a more common one that Instagram trusts
         self.client.set_user_agent(
-            "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+            "Mozilla/5.0 (Linux; Android 14; SM-A536B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
         )
         
         # Configure delay settings
@@ -131,29 +132,78 @@ class InstagramBot:
             logger.error("Username and password are required!")
             return False
         
-        # Delete any old session file to start fresh
+        # Check if we have a valid existing session - try to use it first
         if os.path.exists(self.session_path):
             try:
-                os.remove(self.session_path)
-                logger.info("Removed old session file")
-            except:
-                pass
+                logger.info("Attempting to load existing session...")
+                self.client = Client()
+                self.client.load_settings(self.session_path)
+                # Test if session is still valid
+                try:
+                    self.client.user_info(self.client.user_id)
+                    logger.info("Existing session is valid!")
+                    return True
+                except:
+                    logger.info("Existing session expired, need to login again...")
+            except Exception as e:
+                logger.warning(f"Could not load session: {e}")
         
-        # Create fresh client
+        # Create new client for fresh login
         logger.info("Creating fresh client...")
         self.client = Client()
-        self.setup_client()
         
-        # Try pre-login to get CSRF token
-        logger.info("Getting pre-login session...")
+        # Set up proper headers BEFORE making any requests
+        self.client.set_user_agent(
+            "Mozilla/5.0 (Linux; Android 14; SM-A536B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+        )
+        
+        # Configure delay settings
+        self.client.delay_range = self.config.get("delay_range", [2, 5])
+        
+        # Set proxy if configured
+        if self.config.get("proxy"):
+            self.client.set_proxy(self.config.get("proxy"))
+            logger.info("Proxy configured")
+        
+        # Initialize session by making multiple pre-login requests to get CSRF token
+        # and establish proper session
+        logger.info("Initializing session with pre-login requests...")
+        
         try:
-            # Initialize session by making a simple request first
-            self.client.session.headers.update({
+            # First request to Instagram homepage to get initial cookies/CSRF
+            session = self.client.session
+            
+            # Add more headers that the Instagram app would normally send
+            session.headers.update({
                 "X-IG-Capabilities": "3rTBrJ4AAA==",
-                "X-IG-Connection-Type": "WIFI"
+                "X-IG-Connection-Type": "WIFI",
+                "X-IG-App-ID": "12402341421",
+                "X-IG-Device-ID": str(uuid.uuid4()),
+                "X-IG-Android-ID": str(uuid.uuid4()).replace('-', ''),
+                "Accept-Language": "en-US,en;q=0.9",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "Accept-Encoding": "gzip, deflate",
+                "Host": "i.instagram.com",
+                "Connection": "keep-alive"
             })
+            
+            response = session.get("https://www.instagram.com/", timeout=30)
+            logger.info(f"Instagram homepage response: {response.status_code}")
+            
+            import time
+            # Second request to the launcher/sync endpoint that Instagram uses
+            time.sleep(random.uniform(1, 2))
+            
+            # Make a pre-login sync request
+            sync_response = session.post(
+                "https://i.instagram.com/api/v1/launcher/sync/",
+                json={"id": str(time.time()), "tests": {}},
+                timeout=30
+            )
+            logger.info(f"Launcher sync response: {sync_response.status_code}")
+            
         except Exception as e:
-            logger.debug(f"Pre-login step: {e}")
+            logger.debug(f"Pre-login initialization: {e}")
         
         # Perform fresh login
         logger.info(f"Attempting fresh login for user: {username}")
@@ -196,18 +246,28 @@ class InstagramBot:
                 error_msg = str(e)
                 logger.error(f"Login attempt {attempt + 1} failed: {error_msg}")
                 
-                # If CSRF error, create new client and retry
+                # If CSRF error, we need to get a new CSRF token
                 if "CSRF" in error_msg or "403" in error_msg or "fail" in error_msg:
-                    logger.info("Session error detected, recreating client...")
-                    self.client = Client()
-                    self.setup_client()
+                    logger.info("CSRF error detected, getting new token...")
+                    try:
+                        # Get new CSRF token by making a request to Instagram
+                        self.client.session.get("https://www.instagram.com/")
+                    except Exception as token_error:
+                        logger.debug(f"Token refresh failed: {token_error}")
             
-            # Wait before retry
+            # Wait before retry - use longer delays to avoid rate limiting
             if attempt < self.config.get("max_retries", 3) - 1:
-                wait_time = random.randint(15, 45)
+                wait_time = random.randint(60, 120)  # Wait 1-2 minutes between retries
                 logger.info(f"Waiting {wait_time} seconds before retry...")
                 import time
                 time.sleep(wait_time)
+                
+                # Try to get new CSRF token after waiting
+                try:
+                    logger.info("Attempting to refresh CSRF token...")
+                    self.client.session.get("https://www.instagram.com/", timeout=30)
+                except Exception as e:
+                    logger.debug(f"Token refresh failed: {e}")
         
         logger.error("Login failed after all attempts")
         return False
