@@ -1,0 +1,9 @@
+{
+    "username": "YOUR_INSTAGRAM_USERNAME",
+    "password": "YOUR_INSTAGRAM_PASSWORD",
+    "session_file": "session.json",
+    "proxy": null,
+    "delay_range": [2, 5],
+    "max_retries": 3,
+    "accounts": []
+}
