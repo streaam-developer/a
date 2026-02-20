@@ -89,7 +89,7 @@ class InstagramBot:
         """Setup Instagram client settings"""
         # Set custom user agent - use a more common one
         self.client.set_user_agent(
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+            "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
         )
         
         # Configure delay settings
@@ -99,13 +99,6 @@ class InstagramBot:
         if self.config.get("proxy"):
             self.client.set_proxy(self.config.get("proxy"))
             logger.info("Proxy configured")
-        
-        # Initialize settings for CSRF handling
-        self.client.settings = {
-            "uuids": {},
-            "cookies": {},
-            "token": None
-        }
         
         # Load session if exists
         if os.path.exists(self.session_path):
@@ -154,8 +147,11 @@ class InstagramBot:
         # Try pre-login to get CSRF token
         logger.info("Getting pre-login session...")
         try:
-            # This helps initialize the session properly
-            self.client.user_loginbyusernameprelogin(username)
+            # Initialize session by making a simple request first
+            self.client.session.headers.update({
+                "X-IG-Capabilities": "3rTBrJ4AAA==",
+                "X-IG-Connection-Type": "WIFI"
+            })
         except Exception as e:
             logger.debug(f"Pre-login step: {e}")
         
